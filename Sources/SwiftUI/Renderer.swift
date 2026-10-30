@@ -29,10 +29,18 @@ final class Renderer {
     private var childIndex: UInt64 = 0
     private(set) var isRendering = false
 
-    /// Button actions referenced by the views on screen; the backend holds
+    /// Callbacks referenced by the views on screen; the backend holds
     /// unretained pointers to these.
-    private var actions: [_ActionBox] = []
-    private var pendingActions: [_ActionBox] = []
+    private var actions: [AnyObject] = []
+    private var pendingActions: [AnyObject] = []
+
+    /// `onAppear`/`onDisappear` handlers of the views on screen, by identity.
+    private var appearances: [Appearance] = []
+    private var pendingAppearances: [Appearance] = []
+
+    /// The context of the pass in progress, for property wrappers that read
+    /// the environment.
+    private(set) var currentContext: _RenderContext?
 
     init(renderRoot: @escaping (inout [_Node], _RenderContext) -> Void) {
         self.renderRoot = renderRoot
@@ -45,22 +53,37 @@ final class Renderer {
         stateIndex = 0
         childIndex = 0
         pendingActions = []
+        pendingAppearances = []
 
         sui_render_begin()
         var nodes: [_Node] = []
-        renderRoot(&nodes, _RenderContext(renderer: self))
+        let context = _RenderContext(renderer: self)
+        currentContext = context
+        renderRoot(&nodes, context)
         let root = Renderer.combine(nodes)
         sui_render_commit(root.view, root.flexibleWidth ? 1 : 0, root.flexibleHeight ? 1 : 0)
+        currentContext = nil
 
         // The old views are off screen now, so their actions can go.
         actions = pendingActions
         pendingActions = []
         slots.removeAll { $0.lastUsed != generation }
         isRendering = false
+
+        // Handlers may change state, which schedules another pass.
+        let previous = appearances
+        appearances = pendingAppearances
+        pendingAppearances = []
+        for old in previous where !appearances.contains(where: { $0.key == old.key }) {
+            old.onDisappear?()
+        }
+        for new in appearances where !previous.contains(where: { $0.key == new.key }) {
+            new.onAppear?()
+        }
     }
 
     /// Wraps several top-level views in a vertical stack, as SwiftUI does.
-    private static func combine(_ nodes: [_Node]) -> _Node {
+    static func combine(_ nodes: [_Node]) -> _Node {
         if nodes.count == 1 { return nodes[0] }
         let stack = sui_stack_create(Int(SUIAxisVertical), 8, Int(SUIAlignmentCenter))!
         var root = _Node(view: stack)
@@ -79,6 +102,14 @@ final class Renderer {
         scopeKey = Renderer.mix(scopeKey, childIndex)
         childIndex = 0
         stateIndex = 0
+        return saved
+    }
+
+    /// Like `enterScope()`, but keyed by `identity` instead of position, so
+    /// state follows an element of a `ForEach` when the data reorders.
+    func enterScope(identity: Int) -> Scope {
+        let saved = enterScope()
+        scopeKey = Renderer.mix(saved.key ^ 0x4944_0000_0000_0000, UInt64(UInt(bitPattern: identity)))
         return saved
     }
 
@@ -101,8 +132,38 @@ final class Renderer {
         return box
     }
 
-    func retain(_ action: _ActionBox) {
+    /// A key for the next view at this position that needs an identity
+    /// across passes, such as a navigation link or a list.
+    func makeKey(_ salt: UInt64) -> UInt64 {
+        let key = Renderer.mix(scopeKey ^ salt, stateIndex)
+        stateIndex += 1
+        return key
+    }
+
+    /// Like `stateBox(initialValue:)`, but only makes the value for a new slot.
+    func stateBox<Value>(make: () -> Value) -> _StateBox<Value> {
+        guard isRendering else { return _StateBox(make()) }
+        let key = Renderer.mix(scopeKey ^ 0x5354_4154_4500_0000, stateIndex)
+        if let index = slots.firstIndex(where: { $0.key == key }) {
+            stateIndex += 1
+            slots[index].lastUsed = generation
+            return unsafeDowncast(slots[index].box, to: _StateBox<Value>.self)
+        }
+        return stateBox(initialValue: make())
+    }
+
+    func retain(_ action: AnyObject) {
         pendingActions.append(action)
+    }
+
+    func register(_ appearance: Appearance) {
+        pendingAppearances.append(appearance)
+    }
+
+    struct Appearance {
+        let key: UInt64
+        let onAppear: (() -> Void)?
+        let onDisappear: (() -> Void)?
     }
 
     /// FNV-1a over the 8 bytes of `value`, continuing from `hash`.
@@ -134,6 +195,23 @@ public final class _ActionBox {
         renderer.retain(self)
         let callback: SUICallback = { context in
             Unmanaged<_ActionBox>.fromOpaque(context!).takeUnretainedValue().action()
+        }
+        return (callback, Unmanaged.passUnretained(self).toOpaque())
+    }
+}
+
+/// Like `_ActionBox`, for callbacks that take an index.
+final class _IndexActionBox {
+    let action: (Int) -> Void
+
+    init(_ action: @escaping (Int) -> Void) {
+        self.action = action
+    }
+
+    func register(with renderer: Renderer) -> (SUIIndexCallback, UnsafeMutableRawPointer) {
+        renderer.retain(self)
+        let callback: SUIIndexCallback = { context, index in
+            Unmanaged<_IndexActionBox>.fromOpaque(context!).takeUnretainedValue().action(index)
         }
         return (callback, Unmanaged.passUnretained(self).toOpaque())
     }
