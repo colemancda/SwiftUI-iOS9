@@ -40,10 +40,12 @@ struct ContentView: View {
 | | |
 |---|---|
 | App | `App`, `@main`, `Scene`, `WindowGroup` |
-| Views | `Text`, `Button` (title or custom label), `VStack`, `HStack`, `Spacer`, `ForEach` (ranges, `Identifiable` data), `Color`, `EmptyView` |
+| Views | `Text`, `Button` (title or custom label), `VStack`, `HStack`, `Spacer`, `ForEach` (ranges, `Identifiable` data), `Color`, `EmptyView`, `AnyView`, `Image(systemName:)` |
+| Navigation | `NavigationView`, `NavigationLink(destination:label:)`, `navigationTitle`, `navigationBarItems(trailing:)` |
+| Lists | `List` (plain style, `NavigationLink` rows get a chevron) |
 | Builders | `@ViewBuilder` with any number of children, `if`, `if`/`else` |
-| State | `@State`, `Binding`, `$value` |
-| Modifiers | `font`, `foregroundColor`, `foregroundStyle(Color)`, `padding`, `frame(width:height:)`, `frame(maxWidth:maxHeight:)`, `background(Color)` |
+| State | `@State`, `Binding`, `$value`, `ObservableObject`, `@Published`, `@ObservedObject`, `@StateObject`, `@EnvironmentObject`, `environmentObject(_:)` |
+| Modifiers | `font`, `foregroundColor`, `foregroundStyle(Color)`, `padding`, `frame(width:height:)`, `frame(maxWidth:maxHeight:)`, `background(Color)`, `onAppear`, `onDisappear` |
 | Values | `Font` text styles, `.system(size:weight:)`, `.bold()`; system `Color`s, `Color(red:green:blue:)`; `CGFloat`, `Edge.Set` |
 
 ## How it works
@@ -63,6 +65,17 @@ App code (Embedded Swift)
   inspecting a view. Each `body` evaluation instead runs in a scope keyed by the
   view's position in the tree, and every `State` created in it takes the next
   slot. State whose view disappears is dropped after the render.
+- **Navigation:** a `NavigationView` is a `UINavigationController` kept across
+  renders. Its stack is the list of links pushed so far: each render draws the
+  root, then the destination of the link pushed from it, and so on, so pushed
+  screens stay live. A level whose link disappears is popped.
+- **Observable objects:** there's no Combine. Since every update re-renders
+  everything, setting a `@Published` property just schedules a render.
+  `@EnvironmentObject` looks its object up by type in the render context the
+  first time it's read during a render.
+- **Lists:** a `UIScrollView` of rows, keyed by position so the scroll offset
+  survives re-renders. `ForEach` over `Identifiable` data keys each row by `id`,
+  so state and pushed screens follow an element when the data reorders.
 - **The C boundary:** Swift is compiled for bare-metal armv7, whose calling
   convention differs from iOS's for floating-point and struct arguments. The
   backend API therefore only passes pointers and integers: sizes in whole points,
@@ -84,8 +97,11 @@ Requirements:
 make sdk SDK_ARCHIVE=/path/to/iPhoneOS9.3.sdk.tar.xz   # once
 make                                                   # build Examples/Counter
 make install                                           # copy to the device
-make EXAMPLE=MyApp install                             # build Examples/MyApp
+make EXAMPLE=Devices install                           # build Examples/Devices
 ```
+
+`Examples/Devices` is a list of devices that drills down into details, using
+`NavigationView`, `List`, `NavigationLink` and an `@EnvironmentObject` store.
 
 `make install` needs a jailbroken device with OpenSSH and a USB tunnel
 (`iproxy 2222:22` from libimobiledevice). It uses an SSH config file (`SSH_CONF`)
@@ -111,7 +127,11 @@ with a host entry for the device (`SSH_HOST`, default `4s`). The app goes into
   ranges or `Identifiable` data.
 - State is matched by position. A view that moves (for example, into a
   different `if` branch) starts with fresh state.
-- No `List`, `NavigationView`, `TextField`, `Toggle`, `Image`, animations or
-  gestures yet.
+- No `TextField`, `Toggle`, `Section`, `NavigationStack`, list styles,
+  animations or gestures yet.
+- iOS 9 has no SF Symbols: `Image(systemName:)` draws a similar Unicode
+  character for common symbol names, and nothing for the rest.
+- `@EnvironmentObject` must be read during a render (in `body`) before an
+  action uses it.
 - Layout is UIKit Auto Layout through `UIStackView`, so results are close to
   SwiftUI's, not identical.
