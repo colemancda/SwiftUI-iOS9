@@ -1,0 +1,9 @@
+# Build output
+build/
+
+# iOS 9.3 SDK (Apple's; re-create with `make sdk`)
+sdk/
+
+# macOS metadata
+.DS_Store
+._*
