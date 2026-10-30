@@ -109,15 +109,20 @@ public struct Spacer: View {
 }
 
 /// Renders `content` once per element of `data`.
+///
+/// Each element's state and navigation links follow its `id` for
+/// `Identifiable` data, and its position for ranges.
 public struct ForEach<Data: RandomAccessCollection, Content: View>: View {
     let data: Data
     let content: (Data.Element) -> Content
+    let identity: ((Data.Element) -> Int)?
 
     public var body: Never { fatalError() }
 
     public func _render(into nodes: inout [_Node], context: _RenderContext) {
         for element in data {
-            let scope = context.renderer.enterScope()
+            let scope = identity.map { context.renderer.enterScope(identity: $0(element)) }
+                ?? context.renderer.enterScope()
             content(element)._render(into: &nodes, context: context)
             context.renderer.exitScope(scope)
         }
@@ -128,6 +133,7 @@ extension ForEach where Data == Range<Int> {
     public init(_ data: Range<Int>, @ViewBuilder content: @escaping (Int) -> Content) {
         self.data = data
         self.content = content
+        self.identity = nil
     }
 }
 
@@ -135,5 +141,6 @@ extension ForEach where Data.Element: Identifiable {
     public init(_ data: Data, @ViewBuilder content: @escaping (Data.Element) -> Content) {
         self.data = data
         self.content = content
+        self.identity = { $0.id.hashValue }
     }
 }

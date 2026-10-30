@@ -19,14 +19,18 @@ SDK_ARCHIVE ?= /Volumes/4TB/Downloads/iPhoneOS9.3.sdk.tar.xz
 
 SWIFT_TOOLCHAIN ?= $(HOME)/Library/Developer/Toolchains/swift-6.4.2-RELEASE.xctoolchain
 SWIFTC := $(SWIFT_TOOLCHAIN)/usr/bin/swiftc
+SWIFT_EMBEDDED_LIB := $(SWIFT_TOOLCHAIN)/usr/lib/swift/embedded/armv7-apple-none-macho
 CC     := xcrun clang
 
 # Xcode's linker writes an even LC_MAIN entry offset for Thumb code, so a
 # Thumb main() is entered in ARM state and crashes: build everything as ARM.
 CFLAGS  := -arch $(ARCH) -isysroot $(SDK) -miphoneos-version-min=$(MIN_IOS) \
            -marm -fobjc-arc -O2 -Wall -ISources/CSwiftUIBackend/include
+# String comparison and normalization need the stdlib's Unicode tables;
+# only the parts an app uses are linked.
 LDFLAGS := -arch $(ARCH) -isysroot $(SDK) -miphoneos-version-min=$(MIN_IOS) \
-           -framework UIKit -framework Foundation
+           -framework UIKit -framework Foundation \
+           $(SWIFT_EMBEDDED_LIB)/libswiftUnicodeDataTables.a
 
 # There's no Embedded stdlib for armv7-apple-ios, so Swift targets bare-metal
 # armv7 Mach-O and is linked into the iOS binary. -ffixed-r9: iOS lets callees

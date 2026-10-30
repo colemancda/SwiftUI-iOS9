@@ -34,6 +34,9 @@ public struct _Node {
     var flexibleHeight: Bool = false
     /// Spacers only stretch along their stack's axis.
     var isSpacer: Bool = false
+    /// Set on a `NavigationLink`'s row, which a `List` shows with a chevron
+    /// and makes tappable.
+    var navigationAction: _ActionBox? = nil
 }
 
 /// What a view inherits from its ancestors while rendering.
@@ -41,6 +44,13 @@ public final class _RenderContext {
     let renderer: Renderer
     var font: Font?
     var foregroundColor: Color?
+    /// Objects from `environmentObject(_:)`, innermost last.
+    var environmentObjects: [(ObjectIdentifier, AnyObject)] = []
+    /// The navigation level being rendered, which collects its title, bar
+    /// items and links.
+    var navigation: _NavigationLevel?
+    /// Set while rendering the rows of a `List`.
+    var isInList = false
 
     init(renderer: Renderer) {
         self.renderer = renderer
