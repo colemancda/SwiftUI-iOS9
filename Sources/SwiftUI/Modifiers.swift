@@ -45,10 +45,12 @@ public struct _EnvironmentModifier<Content: View>: View {
     public func _render(into nodes: inout [_Node], context: _RenderContext) {
         let savedFont = context.font
         let savedColor = context.foregroundColor
+        let savedObjects = context.environmentObjects
         update(context)
         content._render(into: &nodes, context: context)
         context.font = savedFont
         context.foregroundColor = savedColor
+        context.environmentObjects = savedObjects
     }
 }
 
