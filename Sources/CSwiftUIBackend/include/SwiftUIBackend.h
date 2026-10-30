@@ -13,6 +13,7 @@
 
 typedef void *SUIViewRef;
 typedef void (*SUICallback)(void *context);
+typedef void (*SUIIndexCallback)(void *context, long index);
 
 enum {
     SUIAxisHorizontal = 0,
@@ -81,5 +82,27 @@ SUIViewRef sui_background_create(SUIViewRef child, unsigned long rgba);
 
 /// Constrains `view`'s width and/or height; pass -1 to leave one unconstrained.
 void sui_view_set_size(SUIViewRef view, long width, long height);
+
+/// A vertically scrolling list of rows divided by separators. `key`
+/// identifies the list across render passes so it keeps its scroll position.
+SUIViewRef sui_list_create(unsigned long key);
+
+/// Appends a row showing `content`. If `action` is non-null the row
+/// highlights when touched and calls it; `disclosure` adds a chevron.
+void sui_list_add_row(SUIViewRef list, SUIViewRef content, long disclosure, SUICallback action, void *context);
+
+/// A navigation controller's view. `key` identifies the controller across
+/// render passes, so its stack and back button survive re-rendering.
+SUIViewRef sui_navigation_create(unsigned long key);
+
+/// Sets what the level at `index` (0 is the root) shows in this pass.
+/// `title_utf8` and `trailing_item` may be null.
+void sui_navigation_set_level(SUIViewRef navigation, long index, SUIViewRef content,
+                              long fill_width, long fill_height,
+                              const char *title_utf8, SUIViewRef trailing_item);
+
+/// Shows the first `count` levels, pushing or popping as needed. When the
+/// user goes back, `did_pop` is called with the number of levels left.
+void sui_navigation_commit(SUIViewRef navigation, long count, SUIIndexCallback did_pop, void *context);
 
 #endif
