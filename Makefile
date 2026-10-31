@@ -30,13 +30,16 @@ CFLAGS  := -arch $(ARCH) -isysroot $(SDK) -miphoneos-version-min=$(MIN_IOS) \
 # calling convention, so they are compiled for the same target.
 EXECUTOR_CFLAGS := -target armv7-apple-none-macho -ffreestanding -marm -ffixed-r9 \
                    -O2 -Wall -ISources/CSwiftUIBackend/include
+# The toolchain's concurrency runtime keeps values in r9, which iOS code
+# overwrites, so it is rebuilt with -ffixed-r9 (`make runtime`, done once).
+RUNTIME := build/runtime/libswift_Concurrency.a
 # String comparison and normalization need the stdlib's Unicode tables;
 # only the parts an app uses are linked. The concurrency runtime is C++, and
 # -dead_strip drops its unused parts, which reference symbols nothing defines.
 LDFLAGS := -arch $(ARCH) -isysroot $(SDK) -miphoneos-version-min=$(MIN_IOS) \
            -framework UIKit -framework Foundation -lc++ -Wl,-dead_strip \
            $(SWIFT_EMBEDDED_LIB)/libswiftUnicodeDataTables.a \
-           $(SWIFT_EMBEDDED_LIB)/libswift_Concurrency.a
+           $(RUNTIME)
 
 # There's no Embedded stdlib for armv7-apple-ios, so Swift targets bare-metal
 # armv7 Mach-O and is linked into the iOS binary. -ffixed-r9: iOS lets callees
@@ -51,7 +54,7 @@ APP_SRCS     := $(wildcard Examples/$(EXAMPLE)/*.swift)
 SSH_CONF ?= /Volumes/4TB/Downloads/IPA/4s-ssh.conf
 SSH_HOST ?= 4s
 
-.PHONY: all install sdk clean
+.PHONY: all install sdk runtime clean distclean
 .DEFAULT_GOAL := all
 
 all: $(BUNDLE)/$(APP)
@@ -76,7 +79,14 @@ build/obj/Executor.o: Sources/CSwiftUIBackend/Executor.c Sources/CSwiftUIBackend
 
 # The linker warns "no platform load command found" for the Swift objects
 # (bare-metal target) and assumes iOS, which is what we want.
-$(BUNDLE)/$(APP): build/obj/$(APP).o build/obj/SwiftUI.o build/obj/Backend.o build/obj/Executor.o Examples/$(EXAMPLE)/Info.plist
+runtime: $(RUNTIME)
+
+# Fetches the runtime's sources for the toolchain's release tag (needs network
+# the first time) and compiles them; see the script.
+$(RUNTIME): Scripts/build-concurrency-runtime.sh
+	Scripts/build-concurrency-runtime.sh $(SWIFT_TOOLCHAIN) build/runtime
+
+$(BUNDLE)/$(APP): build/obj/$(APP).o build/obj/SwiftUI.o build/obj/Backend.o build/obj/Executor.o $(RUNTIME) Examples/$(EXAMPLE)/Info.plist
 	@mkdir -p $(BUNDLE)
 	$(CC) $(LDFLAGS) build/obj/$(APP).o build/obj/SwiftUI.o build/obj/Backend.o build/obj/Executor.o -o $@.tmp
 	ldid -S $@.tmp
@@ -101,5 +111,9 @@ sdk:
 	perl -0pi -e 's/(symbols: *\[ )/$$1_bzero, _memcmp, _memcpy, _memmove, _memset, /' \
 	  $(SDK)/usr/lib/system/libsystem_platform.tbd
 
+# Keeps the rebuilt runtime; `make distclean` removes it too.
 clean:
+	find build -mindepth 1 -maxdepth 1 ! -name runtime -exec rm -rf {} +
+
+distclean:
 	rm -rf build
