@@ -45,7 +45,8 @@ struct ContentView: View {
 | Lists | `List` (plain style, `NavigationLink` rows get a chevron) |
 | Builders | `@ViewBuilder` with any number of children, `if`, `if`/`else` |
 | State | `@State`, `Binding`, `$value`, `ObservableObject`, `@Published`, `@ObservedObject`, `@StateObject`, `@EnvironmentObject`, `environmentObject(_:)` |
-| Modifiers | `font`, `foregroundColor`, `foregroundStyle(Color)`, `padding`, `frame(width:height:)`, `frame(maxWidth:maxHeight:)`, `background(Color)`, `onAppear`, `onDisappear` |
+| Modifiers | `font`, `foregroundColor`, `foregroundStyle(Color)`, `padding`, `frame(width:height:)`, `frame(maxWidth:maxHeight:)`, `background(Color)`, `onAppear`, `onDisappear`, `task` |
+| Concurrency | `async`/`await`, `Task`, actors, `Task.sleep(nanoseconds:)`, cancellation |
 | Values | `Font` text styles, `.system(size:weight:)`, `.bold()`; system `Color`s, `Color(red:green:blue:)`; `CGFloat`, `Edge.Set` |
 
 ## How it works
@@ -71,8 +72,14 @@ App code (Embedded Swift)
   screens stay live. A level whose link disappears is popped.
 - **Observable objects:** there's no Combine. Since every update re-renders
   everything, setting a `@Published` property just schedules a render.
-  `@EnvironmentObject` looks its object up by type in the render context the
-  first time it's read during a render.
+  `@EnvironmentObject` looks its object up by type in the render context when
+  the view is created, or else the first time it's read during a render.
+- **Concurrency:** all tasks run on the main queue. `Executor.c` replaces
+  Embedded Swift's default executor, whose loop would block UIKit, and is
+  compiled for the bare-metal target because the runtime calls it with the
+  Swift calling convention. Embedded Swift has no clocks, so `Task.sleep` is
+  provided here using a main-queue timer, and `import SwiftUI` re-exports the
+  concurrency module.
 - **Lists:** a `UIScrollView` of rows, keyed by position so the scroll offset
   survives re-renders. `ForEach` over `Identifiable` data keys each row by `id`,
   so state and pushed screens follow an element when the data reorders.
@@ -131,7 +138,9 @@ with a host entry for the device (`SSH_HOST`, default `4s`). The app goes into
   animations or gestures yet.
 - iOS 9 has no SF Symbols: `Image(systemName:)` draws a similar Unicode
   character for common symbol names, and nothing for the rest.
-- `@EnvironmentObject` must be read during a render (in `body`) before an
-  action uses it.
+- `Task.sleep` doesn't wake early when its task is cancelled; it throws
+  `CancellationError` when the time is up. There are no clocks or
+  `Task.sleep(for:)`.
+- All tasks share the main thread: long synchronous work in a task blocks the UI.
 - Layout is UIKit Auto Layout through `UIStackView`, so results are close to
   SwiftUI's, not identical.
