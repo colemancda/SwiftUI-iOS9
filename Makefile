@@ -26,11 +26,17 @@ CC     := xcrun clang
 # Thumb main() is entered in ARM state and crashes: build everything as ARM.
 CFLAGS  := -arch $(ARCH) -isysroot $(SDK) -miphoneos-version-min=$(MIN_IOS) \
            -marm -fobjc-arc -O2 -Wall -ISources/CSwiftUIBackend/include
+# The executor hooks are called by the Swift runtime with its (bare-metal)
+# calling convention, so they are compiled for the same target.
+EXECUTOR_CFLAGS := -target armv7-apple-none-macho -ffreestanding -marm -ffixed-r9 \
+                   -O2 -Wall -ISources/CSwiftUIBackend/include
 # String comparison and normalization need the stdlib's Unicode tables;
-# only the parts an app uses are linked.
+# only the parts an app uses are linked. The concurrency runtime is C++, and
+# -dead_strip drops its unused parts, which reference symbols nothing defines.
 LDFLAGS := -arch $(ARCH) -isysroot $(SDK) -miphoneos-version-min=$(MIN_IOS) \
-           -framework UIKit -framework Foundation \
-           $(SWIFT_EMBEDDED_LIB)/libswiftUnicodeDataTables.a
+           -framework UIKit -framework Foundation -lc++ -Wl,-dead_strip \
+           $(SWIFT_EMBEDDED_LIB)/libswiftUnicodeDataTables.a \
+           $(SWIFT_EMBEDDED_LIB)/libswift_Concurrency.a
 
 # There's no Embedded stdlib for armv7-apple-ios, so Swift targets bare-metal
 # armv7 Mach-O and is linked into the iOS binary. -ffixed-r9: iOS lets callees
@@ -64,11 +70,15 @@ build/obj/Backend.o: Sources/CSwiftUIBackend/Backend.m Sources/CSwiftUIBackend/i
 	@mkdir -p build/obj
 	$(CC) $(CFLAGS) -c $< -o $@
 
+build/obj/Executor.o: Sources/CSwiftUIBackend/Executor.c Sources/CSwiftUIBackend/include/SwiftUIBackend.h
+	@mkdir -p build/obj
+	$(CC) $(EXECUTOR_CFLAGS) -c $< -o $@
+
 # The linker warns "no platform load command found" for the Swift objects
 # (bare-metal target) and assumes iOS, which is what we want.
-$(BUNDLE)/$(APP): build/obj/$(APP).o build/obj/SwiftUI.o build/obj/Backend.o Examples/$(EXAMPLE)/Info.plist
+$(BUNDLE)/$(APP): build/obj/$(APP).o build/obj/SwiftUI.o build/obj/Backend.o build/obj/Executor.o Examples/$(EXAMPLE)/Info.plist
 	@mkdir -p $(BUNDLE)
-	$(CC) $(LDFLAGS) build/obj/$(APP).o build/obj/SwiftUI.o build/obj/Backend.o -o $@.tmp
+	$(CC) $(LDFLAGS) build/obj/$(APP).o build/obj/SwiftUI.o build/obj/Backend.o build/obj/Executor.o -o $@.tmp
 	ldid -S $@.tmp
 	mv $@.tmp $@
 	plutil -convert binary1 -o $(BUNDLE)/Info.plist Examples/$(EXAMPLE)/Info.plist
