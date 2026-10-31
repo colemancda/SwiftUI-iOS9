@@ -20,10 +20,8 @@ public struct State<Value> {
     let box: _StateBox<Value>
 
     public init(wrappedValue value: Value) {
-        if let renderer = currentRenderer {
-            box = renderer.stateBox(initialValue: value)
-        } else {
-            box = _StateBox(value)
+        box = MainActor.assumeIsolated {
+            currentRenderer?.stateBox(initialValue: value) ?? _StateBox(value)
         }
     }
 
