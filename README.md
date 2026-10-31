@@ -102,13 +102,20 @@ Requirements:
 
 ```bash
 make sdk SDK_ARCHIVE=/path/to/iPhoneOS9.3.sdk.tar.xz   # once
+make runtime                                           # once; also run by make
 make                                                   # build Examples/Counter
 make install                                           # copy to the device
 make EXAMPLE=Devices install                           # build Examples/Devices
 ```
 
 `Examples/Devices` is a list of devices that drills down into details, using
-`NavigationView`, `List`, `NavigationLink` and an `@EnvironmentObject` store.
+`NavigationView`, `List`, `NavigationLink` and an `@EnvironmentObject` store,
+with a `.task` that simulates an advertisement every second.
+
+`make runtime` rebuilds the concurrency runtime (see below) into
+`build/runtime`. It downloads the runtime's sources for the toolchain's release
+tag the first time, so it needs network access. `make clean` keeps it;
+`make distclean` removes it.
 
 `make install` needs a jailbroken device with OpenSSH and a USB tunnel
 (`iproxy 2222:22` from libimobiledevice). It uses an SSH config file (`SSH_CONF`)
@@ -117,10 +124,19 @@ with a host entry for the device (`SSH_HOST`, default `4s`). The app goes into
 
 ### Toolchain fixes
 
-- **ARM mode, not Thumb** (`-marm`, `-Xcc -marm`): Xcode's linker writes an even
-  entry offset for a Thumb `main()`, so it starts in ARM state and crashes.
+- **ARM mode, not Thumb** (`-marm`, `-Xcc -marm`): Xcode's linker doesn't set
+  the Thumb bit in addresses of Thumb functions, neither the entry offset of
+  `main()` nor function pointers, so calls through them run Thumb code in ARM
+  state and crash.
 - **`-Xcc -ffixed-r9`:** iOS lets functions overwrite `r9`, but the bare-metal
   armv7 target expects it preserved across calls.
+- **Rebuilt concurrency runtime** (`Scripts/build-concurrency-runtime.sh`): the
+  toolchain's `libswift_Concurrency.a` is Thumb code that keeps values in `r9`,
+  so it crashes on iOS for both reasons above. The script compiles its C++
+  sources with the official build's flags plus `-ffixed-r9` and `-marm`, and
+  fails if any `r9` use or Thumb code remains. Without those two flags, the same
+  flags reproduce the shipped objects, apart from C++ standard library
+  templates from the local SDK.
 - **SDK stubs** (`make sdk`): removes `i386, x86_64` from the `.tbd` files, which
   Xcode's linker otherwise reads as simulator-only, and adds `memcpy`, `memmove`,
   `memset`, `bzero` and `memcmp`, which the stubs leave out.
