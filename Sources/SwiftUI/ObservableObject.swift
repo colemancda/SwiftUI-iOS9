@@ -45,10 +45,11 @@ public struct StateObject<ObjectType: ObservableObject> {
     let box: _StateBox<ObjectType>
 
     public init(wrappedValue: @autoclosure () -> ObjectType) {
-        if let renderer = currentRenderer {
-            box = renderer.stateBox(make: wrappedValue)
-        } else {
-            box = _StateBox(wrappedValue())
+        box = MainActor.assumeIsolated {
+            if let renderer = currentRenderer {
+                return renderer.stateBox(make: wrappedValue)
+            }
+            return _StateBox(wrappedValue())
         }
     }
 
@@ -89,8 +90,8 @@ public struct EnvironmentObject<ObjectType: ObservableObject> {
 
     static func lookup() -> ObjectType? {
         let id = ObjectIdentifier(ObjectType.self)
-        guard let objects = currentRenderer?.currentContext?.environmentObjects,
-              let match = objects.last(where: { $0.0 == id }) else {
+        let objects = MainActor.assumeIsolated { currentRenderer?.currentContext?.environmentObjects }
+        guard let objects, let match = objects.last(where: { $0.0 == id }) else {
             return nil
         }
         return unsafeDowncast(match.1, to: ObjectType.self)

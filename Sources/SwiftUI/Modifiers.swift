@@ -30,6 +30,11 @@ extension View {
         _FrameModifier(content: self, width: nil, height: nil, maxWidth: maxWidth, maxHeight: maxHeight)
     }
 
+    /// Disables the controls in this view.
+    public func disabled(_ disabled: Bool) -> some View {
+        _EnvironmentModifier(content: self) { if disabled { $0.isEnabled = false } }
+    }
+
     public func background(_ color: Color) -> some View {
         _BackgroundModifier(content: self, color: color)
     }
@@ -46,11 +51,13 @@ public struct _EnvironmentModifier<Content: View>: View {
         let savedFont = context.font
         let savedColor = context.foregroundColor
         let savedObjects = context.environmentObjects
+        let savedEnabled = context.isEnabled
         update(context)
         content._render(into: &nodes, context: context)
         context.font = savedFont
         context.foregroundColor = savedColor
         context.environmentObjects = savedObjects
+        context.isEnabled = savedEnabled
     }
 }
 

@@ -23,11 +23,14 @@ public struct NavigationView<Content: View>: View {
 
         let savedLevel = context.navigation
         let savedInList = context.isInList
+        let savedVisible = context.isVisible
         context.isInList = false
         var level = _NavigationLevel(path: path, depth: 0)
         var count = 0
         while true {
             context.navigation = level
+            // Only the top level is on screen.
+            context.isVisible = savedVisible && count == path.value.count
             var children: [_Node] = []
             if count == 0 {
                 content._render(into: &children, context: context)
@@ -58,6 +61,7 @@ public struct NavigationView<Content: View>: View {
         }
         context.navigation = savedLevel
         context.isInList = savedInList
+        context.isVisible = savedVisible
 
         if count - 1 < path.value.count {
             path.value.removeLast(path.value.count - (count - 1))
@@ -145,8 +149,8 @@ extension NavigationLink where Label == Text {
 }
 
 /// A string literal used as a localization key. Strings are not localized
-/// on this platform; the key is shown as is.
-public struct LocalizedStringKey: ExpressibleByStringLiteral {
+/// on this platform; the key is shown as is, with its interpolations.
+public struct LocalizedStringKey: ExpressibleByStringLiteral, ExpressibleByStringInterpolation {
     let key: String
 
     public init(_ key: String) {
@@ -155,6 +159,65 @@ public struct LocalizedStringKey: ExpressibleByStringLiteral {
 
     public init(stringLiteral value: String) {
         self.key = value
+    }
+
+    public init(stringInterpolation: StringInterpolation) {
+        self.key = stringInterpolation.output
+    }
+
+    public struct StringInterpolation: StringInterpolationProtocol {
+        var output = ""
+
+        public init(literalCapacity: Int, interpolationCount: Int) {
+            output.reserveCapacity(literalCapacity)
+        }
+
+        public mutating func appendLiteral(_ literal: String) {
+            output += literal
+        }
+
+        public mutating func appendInterpolation(_ string: String) {
+            output += string
+        }
+
+        public mutating func appendInterpolation<T: CustomStringConvertible>(_ value: T) {
+            output += value.description
+        }
+
+        /// Supports `%d` and `%.Nf` specifiers.
+        public mutating func appendInterpolation<T: BinaryFloatingPoint>(_ value: T, specifier: String) {
+            output += LocalizedStringKey.format(Double(value), specifier: specifier)
+        }
+
+        public mutating func appendInterpolation<T: BinaryInteger>(_ value: T, specifier: String) {
+            output += LocalizedStringKey.format(Double(value), specifier: specifier)
+        }
+    }
+
+    /// Formats like `String(format:)` for `%d`, `%i` and `%.Nf`.
+    static func format(_ value: Double, specifier: String) -> String {
+        var decimals = 0
+        let utf8 = Array(specifier.utf8)
+        // %.Nf
+        if utf8.count >= 4, utf8[0] == 0x25, utf8[1] == 0x2E, utf8.last == 0x66 {
+            decimals = Int(String(decoding: utf8[2 ..< utf8.count - 1], as: UTF8.self)) ?? 6
+        } else if utf8 == Array("%f".utf8) {
+            decimals = 6
+        }
+        var scale = 1.0
+        for _ in 0 ..< decimals {
+            scale *= 10
+        }
+        let scaled = (value * scale).rounded()
+        let sign = scaled < 0 ? "-" : ""
+        let magnitude = scaled < 0 ? -scaled : scaled
+        let whole = Int(magnitude / scale)
+        guard decimals > 0 else {
+            return sign + whole.description
+        }
+        let fraction = Int(magnitude - Double(whole) * scale).description
+        let zeros = String(repeating: "0", count: max(0, decimals - fraction.utf8.count))
+        return sign + whole.description + "." + zeros + fraction
     }
 }
 

@@ -7,6 +7,7 @@ import CSwiftUIBackend
 /// scope keyed by its parent's scope and its order among its siblings, and
 /// each `State` created while that body runs takes the next slot in it.
 /// A view whose position changes (say, behind an `if`) gets fresh state.
+@MainActor
 final class Renderer {
     private struct Slot {
         let key: UInt64
@@ -182,10 +183,11 @@ final class Renderer {
 nonisolated(unsafe) var currentRenderer: Renderer?
 
 /// A button action the backend calls through a C function pointer.
+@MainActor
 public final class _ActionBox {
-    let action: () -> Void
+    let action: @MainActor () -> Void
 
-    init(_ action: @escaping () -> Void) {
+    init(_ action: @escaping @MainActor () -> Void) {
         self.action = action
     }
 
@@ -194,24 +196,29 @@ public final class _ActionBox {
     func register(with renderer: Renderer) -> (SUICallback, UnsafeMutableRawPointer) {
         renderer.retain(self)
         let callback: SUICallback = { context in
-            Unmanaged<_ActionBox>.fromOpaque(context!).takeUnretainedValue().action()
+            MainActor.assumeIsolated {
+                Unmanaged<_ActionBox>.fromOpaque(context!).takeUnretainedValue().action()
+            }
         }
         return (callback, Unmanaged.passUnretained(self).toOpaque())
     }
 }
 
 /// Like `_ActionBox`, for callbacks that take an index.
+@MainActor
 final class _IndexActionBox {
-    let action: (Int) -> Void
+    let action: @MainActor (Int) -> Void
 
-    init(_ action: @escaping (Int) -> Void) {
+    init(_ action: @escaping @MainActor (Int) -> Void) {
         self.action = action
     }
 
     func register(with renderer: Renderer) -> (SUIIndexCallback, UnsafeMutableRawPointer) {
         renderer.retain(self)
         let callback: SUIIndexCallback = { context, index in
-            Unmanaged<_IndexActionBox>.fromOpaque(context!).takeUnretainedValue().action(index)
+            MainActor.assumeIsolated {
+                Unmanaged<_IndexActionBox>.fromOpaque(context!).takeUnretainedValue().action(index)
+            }
         }
         return (callback, Unmanaged.passUnretained(self).toOpaque())
     }
