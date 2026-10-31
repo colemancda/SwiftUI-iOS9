@@ -11,6 +11,10 @@ extern char ***_NSGetArgv(void);
 static SUICallback SUILaunch;
 static SUICallback SUIRender;
 static BOOL SUIRenderScheduled;
+/// A render replaces every view, which would cancel a touch in progress or
+/// stop a scroll, so it waits for those to end.
+static BOOL SUITouching;
+static BOOL SUIRenderDeferred;
 static NSMutableArray *SUIPendingViews;
 static UIViewController *SUIRootController;
 /// Lists created in the current pass, and the last scroll offset of each list key.
@@ -87,6 +91,36 @@ static void SUIAttachAction(UIControl *control, SUICallback action, void *contex
     objc_setAssociatedObject(control, SUIActionTargetKey, target, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
 }
 
+/// Calls an index callback with a control's value when it changes.
+@interface SUIValueTarget : NSObject
+@property (nonatomic) SUIIndexCallback changed;
+@property (nonatomic) SUICallback ended;
+@property (nonatomic) void *context;
+@property (nonatomic, copy) long (^value)(id control);
+@end
+
+@implementation SUIValueTarget
+- (void)valueChanged:(id)control {
+    if (self.changed) self.changed(self.context, self.value(control));
+}
+- (void)editingEnded:(id)control {
+    if (self.ended) self.ended(self.context);
+}
+@end
+
+static void SUIAttachValueAction(UIControl *control, SUIIndexCallback changed, SUICallback ended,
+                                 void *context, long (^value)(id control)) {
+    SUIValueTarget *target = [[SUIValueTarget alloc] init];
+    target.changed = changed;
+    target.ended = ended;
+    target.context = context;
+    target.value = value;
+    [control addTarget:target action:@selector(valueChanged:) forControlEvents:UIControlEventValueChanged];
+    [control addTarget:target action:@selector(editingEnded:)
+      forControlEvents:UIControlEventTouchUpInside | UIControlEventTouchUpOutside | UIControlEventTouchCancel];
+    objc_setAssociatedObject(control, SUIActionTargetKey, target, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+}
+
 /// A control that dims its content while touched, like a SwiftUI plain button.
 @interface SUITappable : UIControl
 @end
@@ -100,13 +134,33 @@ static void SUIAttachAction(UIControl *control, SUICallback action, void *contex
 
 #pragma mark - App
 
+/// Tracks whether a finger is on the screen.
+@interface SUIWindow : UIWindow
+@end
+
+@implementation SUIWindow
+- (void)sendEvent:(UIEvent *)event {
+    [super sendEvent:event];
+    if (event.type != UIEventTypeTouches) return;
+    BOOL touching = NO;
+    for (UITouch *touch in event.allTouches) {
+        if (touch.phase != UITouchPhaseEnded && touch.phase != UITouchPhaseCancelled) touching = YES;
+    }
+    SUITouching = touching;
+    if (!touching && SUIRenderDeferred) {
+        SUIRenderDeferred = NO;
+        sui_schedule_render();
+    }
+}
+@end
+
 @interface SUIAppDelegate : UIResponder <UIApplicationDelegate>
 @property (nonatomic, strong) UIWindow *window;
 @end
 
 @implementation SUIAppDelegate
 - (BOOL)application:(UIApplication *)application didFinishLaunchingWithOptions:(NSDictionary *)launchOptions {
-    self.window = [[UIWindow alloc] initWithFrame:[UIScreen mainScreen].bounds];
+    self.window = [[SUIWindow alloc] initWithFrame:[UIScreen mainScreen].bounds];
     SUIRootController = [[UIViewController alloc] init];
     SUIRootController.view.backgroundColor = [UIColor whiteColor];
     self.window.rootViewController = SUIRootController;
@@ -125,11 +179,32 @@ void sui_run(SUICallback launch, SUICallback render) {
     }
 }
 
+/// Each render rebuilds every view and runs Auto Layout from scratch, which
+/// takes a large share of an iPhone 4S's CPU, so renders are at most this often.
+static const CFTimeInterval SUIMinimumRenderInterval = 0.25;
+static CFAbsoluteTime SUILastRender;
+
 void sui_schedule_render(void) {
     if (SUIRenderScheduled) return;
     SUIRenderScheduled = YES;
-    dispatch_async(dispatch_get_main_queue(), ^{
+    CFTimeInterval wait = SUIMinimumRenderInterval - (CFAbsoluteTimeGetCurrent() - SUILastRender);
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, wait > 0 ? (int64_t)(wait * NSEC_PER_SEC) : 0),
+                   dispatch_get_main_queue(), ^{
         SUIRenderScheduled = NO;
+        if (SUITouching) {
+            SUIRenderDeferred = YES; // the window renders when the touch ends
+            return;
+        }
+        for (NSNumber *key in SUILiveLists) {
+            UIScrollView *list = [SUILiveLists objectForKey:key];
+            if (list.window && (list.isDragging || list.isDecelerating)) {
+                // Try again once the scroll settles.
+                dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.1 * NSEC_PER_SEC)),
+                               dispatch_get_main_queue(), ^{ sui_schedule_render(); });
+                return;
+            }
+        }
+        SUILastRender = CFAbsoluteTimeGetCurrent();
         if (SUIRender) SUIRender(NULL);
     });
 }
@@ -283,6 +358,11 @@ SUIViewRef sui_stack_create(long axis, long spacing, long alignment) {
 void sui_stack_add(SUIViewRef stackRef, SUIViewRef childRef, long stretchCrossAxis) {
     UIStackView *stack = (UIStackView *)SUIView(stackRef);
     UIView *child = SUIView(childRef);
+    // A multi-line label has no reliable natural width in a horizontal stack,
+    // so it wraps early; keep labels in an HStack on one line.
+    if (stack.axis == UILayoutConstraintAxisHorizontal && [child isKindOfClass:[UILabel class]]) {
+        ((UILabel *)child).numberOfLines = 1;
+    }
     [stack addArrangedSubview:child];
     if (stretchCrossAxis) {
         NSLayoutConstraint *stretch = stack.axis == UILayoutConstraintAxisVertical
@@ -428,9 +508,14 @@ void sui_list_add_row(SUIViewRef listRef, SUIViewRef contentRef, long disclosure
     // Rows are at least as tall as a table cell; content hugs the leading edge.
     NSLayoutConstraint *minHeight = [row.heightAnchor constraintGreaterThanOrEqualToConstant:44];
     NSLayoutConstraint *contentTrailing = [row.trailingAnchor constraintGreaterThanOrEqualToAnchor:content.trailingAnchor constant:trailing];
+    // Content that can grow, such as a stack with a spacer, reaches the trailing edge;
+    // labels hug their text more strongly than this.
+    NSLayoutConstraint *contentFill = [row.trailingAnchor constraintEqualToAnchor:content.trailingAnchor constant:trailing];
+    contentFill.priority = 249;
     [NSLayoutConstraint activateConstraints:@[
         minHeight,
         contentTrailing,
+        contentFill,
         [content.topAnchor constraintGreaterThanOrEqualToAnchor:row.topAnchor constant:11],
         [row.bottomAnchor constraintGreaterThanOrEqualToAnchor:content.bottomAnchor constant:11],
         [content.centerYAnchor constraintEqualToAnchor:row.centerYAnchor],
@@ -563,5 +648,127 @@ void sui_navigation_commit(SUIViewRef navigationRef, long count, SUIIndexCallbac
         [navigation popToViewController:desired.lastObject animated:YES];
     } else {
         [navigation setViewControllers:desired animated:NO];
+    }
+}
+
+#pragma mark - Form
+
+/// Background of grouped tables in iOS 9.
+static UIColor *SUIGroupedBackgroundColor(void) {
+    return [UIColor colorWithRed:0.937 green:0.937 blue:0.957 alpha:1];
+}
+
+SUIViewRef sui_form_create(unsigned long key) {
+    SUIViewRef ref = sui_list_create(key);
+    SUIView(ref).backgroundColor = SUIGroupedBackgroundColor();
+    return ref;
+}
+
+SUIViewRef sui_form_header_create(const char *titleUTF8) {
+    UIView *header = [[UIView alloc] init];
+    header.translatesAutoresizingMaskIntoConstraints = NO;
+    // Gap before the section, with the title near its bottom.
+    NSLayoutConstraint *height = [header.heightAnchor constraintGreaterThanOrEqualToConstant:titleUTF8 ? 55 : 35];
+    height.active = YES;
+    if (titleUTF8) {
+        UILabel *label = [[UILabel alloc] init];
+        label.translatesAutoresizingMaskIntoConstraints = NO;
+        label.text = [[NSString stringWithUTF8String:titleUTF8] uppercaseString];
+        label.font = [UIFont systemFontOfSize:13];
+        label.textColor = [UIColor colorWithRed:0.427 green:0.427 blue:0.447 alpha:1];
+        [header addSubview:label];
+        [NSLayoutConstraint activateConstraints:@[
+            [label.leadingAnchor constraintEqualToAnchor:header.leadingAnchor constant:16],
+            [header.trailingAnchor constraintGreaterThanOrEqualToAnchor:label.trailingAnchor constant:16],
+            [header.bottomAnchor constraintEqualToAnchor:label.bottomAnchor constant:7],
+        ]];
+    }
+    UIView *separator = [[UIView alloc] init];
+    separator.translatesAutoresizingMaskIntoConstraints = NO;
+    separator.backgroundColor = [UIColor colorWithRed:0.78 green:0.78 blue:0.8 alpha:1];
+    [header addSubview:separator];
+    [NSLayoutConstraint activateConstraints:@[
+        [separator.heightAnchor constraintEqualToConstant:1.0 / [UIScreen mainScreen].scale],
+        [separator.leadingAnchor constraintEqualToAnchor:header.leadingAnchor],
+        [separator.trailingAnchor constraintEqualToAnchor:header.trailingAnchor],
+        [separator.bottomAnchor constraintEqualToAnchor:header.bottomAnchor],
+    ]];
+    return SUIKeep(header);
+}
+
+void sui_list_add_view(SUIViewRef listRef, SUIViewRef viewRef) {
+    UIStackView *rows = (UIStackView *)SUIView(listRef).subviews.firstObject;
+    [rows addArrangedSubview:SUIView(viewRef)];
+}
+
+#pragma mark - Controls
+
+SUIViewRef sui_switch_create(long isOn, SUIIndexCallback changed, void *context) {
+    UISwitch *control = [[UISwitch alloc] init];
+    control.on = isOn != 0;
+    SUIAttachValueAction(control, changed, NULL, context, ^long(UISwitch *control) { return control.isOn ? 1 : 0; });
+    return SUIKeep(control);
+}
+
+SUIViewRef sui_stepper_create(long value, long minimum, long maximum, long step,
+                              SUIIndexCallback changed, void *context) {
+    UIStepper *control = [[UIStepper alloc] init];
+    control.minimumValue = minimum / 100.0;
+    control.maximumValue = maximum / 100.0;
+    control.stepValue = step / 100.0;
+    control.value = value / 100.0;
+    SUIAttachValueAction(control, changed, NULL, context, ^long(UIStepper *control) { return lround(control.value * 100); });
+    return SUIKeep(control);
+}
+
+SUIViewRef sui_slider_create(long value, long minimum, long maximum, long step,
+                             SUIIndexCallback changed, SUICallback ended, void *context) {
+    UISlider *control = [[UISlider alloc] init];
+    control.minimumValue = minimum / 100.0;
+    control.maximumValue = maximum / 100.0;
+    control.value = value / 100.0;
+    SUIMakeFlexible(control);
+    [control setContentHuggingPriority:UILayoutPriorityDefaultHigh forAxis:UILayoutConstraintAxisVertical];
+    SUIAttachValueAction(control, changed, ended, context, ^long(UISlider *control) {
+        long hundredths = lroundf(control.value * 100);
+        if (step > 0) {
+            hundredths = minimum + lround((double)(hundredths - minimum) / step) * step;
+            control.value = hundredths / 100.0;
+        }
+        return hundredths;
+    });
+    return SUIKeep(control);
+}
+
+SUIViewRef sui_segmented_create(const char *const *titles, long count, long selected,
+                                SUIIndexCallback changed, void *context) {
+    UISegmentedControl *control = [[UISegmentedControl alloc] init];
+    for (long i = 0; i < count; i++) {
+        [control insertSegmentWithTitle:[NSString stringWithUTF8String:titles[i]] atIndex:i animated:NO];
+    }
+    control.selectedSegmentIndex = selected >= 0 && selected < count ? selected : UISegmentedControlNoSegment;
+    SUIMakeFlexible(control);
+    [control setContentHuggingPriority:UILayoutPriorityDefaultHigh forAxis:UILayoutConstraintAxisVertical];
+    SUIAttachValueAction(control, changed, NULL, context, ^long(UISegmentedControl *control) {
+        return control.selectedSegmentIndex;
+    });
+    return SUIKeep(control);
+}
+
+SUIViewRef sui_activity_indicator_create(void) {
+    UIActivityIndicatorView *indicator = [[UIActivityIndicatorView alloc]
+        initWithActivityIndicatorStyle:UIActivityIndicatorViewStyleGray];
+    [indicator startAnimating];
+    return SUIKeep(indicator);
+}
+
+void sui_control_set_enabled(SUIViewRef ref, long enabled) {
+    UIView *view = SUIView(ref);
+    if ([view isKindOfClass:[UIControl class]]) {
+        ((UIControl *)view).enabled = enabled != 0;
+    }
+    // System controls dim themselves; tappable views don't.
+    if ([view isKindOfClass:[SUITappable class]]) {
+        view.alpha = enabled ? 1.0 : 0.4;
     }
 }

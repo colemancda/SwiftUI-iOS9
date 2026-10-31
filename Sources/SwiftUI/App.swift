@@ -1,6 +1,7 @@
 import CSwiftUIBackend
 
 /// The app's entry point. Mark a conforming type `@main`.
+@MainActor
 public protocol App {
     associatedtype Body: Scene
 
@@ -10,15 +11,20 @@ public protocol App {
 }
 
 extension App {
-    public static func main() {
-        let app = Self()
-        currentRenderer = Renderer { nodes, context in
-            app.body._render(into: &nodes, context: context)
+    nonisolated public static func main() {
+        MainActor.assumeIsolated {
+            let app = Self()
+            currentRenderer = Renderer { nodes, context in
+                app.body._render(into: &nodes, context: context)
+            }
         }
-        sui_run(nil, { _ in currentRenderer?.render() })
+        sui_run(nil, { _ in
+            MainActor.assumeIsolated { currentRenderer?.render() }
+        })
     }
 }
 
+@MainActor
 public protocol Scene {
     func _render(into nodes: inout [_Node], context: _RenderContext)
 }

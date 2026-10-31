@@ -14,7 +14,16 @@ public struct List<Content: View>: View {
     public func _render(into nodes: inout [_Node], context: _RenderContext) {
         let renderer = context.renderer
         let list = sui_list_create(UInt(truncatingIfNeeded: renderer.makeKey(0x4c49_5354_0000_0000)))!
+        _List.addRows(of: content, to: list, context: context)
+        nodes.append(_Node(view: list, flexibleWidth: true, flexibleHeight: true))
+    }
+}
 
+/// Fills `List` and `Form`.
+enum _List {
+    /// Renders `content` and adds one row per view, or a header for a `Section`.
+    @MainActor
+    static func addRows<Content: View>(of content: Content, to list: SUIViewRef, context: _RenderContext) {
         let savedInList = context.isInList
         context.isInList = true
         var rows: [_Node] = []
@@ -22,14 +31,15 @@ public struct List<Content: View>: View {
         context.isInList = savedInList
 
         for row in rows {
-            if let action = row.navigationAction {
-                let (callback, actionContext) = action.register(with: renderer)
+            if row.isListHeader {
+                sui_list_add_view(list, row.view)
+            } else if let action = row.navigationAction {
+                let (callback, actionContext) = action.register(with: context.renderer)
                 sui_list_add_row(list, row.view, 1, callback, actionContext)
             } else {
                 sui_list_add_row(list, row.view, 0, nil, nil)
             }
         }
-        nodes.append(_Node(view: list, flexibleWidth: true, flexibleHeight: true))
     }
 }
 

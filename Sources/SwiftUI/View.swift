@@ -1,6 +1,7 @@
 import CSwiftUIBackend
 
 /// A piece of user interface. Same shape as SwiftUI's `View`.
+@MainActor
 public protocol View {
     associatedtype Body: View
 
@@ -37,6 +38,8 @@ public struct _Node {
     /// Set on a `NavigationLink`'s row, which a `List` shows with a chevron
     /// and makes tappable.
     var navigationAction: _ActionBox? = nil
+    /// A `Section` header, which a list adds as is rather than as a row.
+    var isListHeader: Bool = false
 }
 
 /// What a view inherits from its ancestors while rendering.
@@ -51,6 +54,16 @@ public final class _RenderContext {
     var navigation: _NavigationLevel?
     /// Set while rendering the rows of a `List`.
     var isInList = false
+    /// Cleared by `disabled(_:)`.
+    var isEnabled = true
+    /// Cleared while rendering a navigation level covered by a pushed one, so
+    /// its views disappear, as in SwiftUI, though they stay rendered.
+    var isVisible = true
+    /// While set, `Text` adds its string here instead of making a label,
+    /// so a `Picker` can read its options' titles.
+    var textSink: _TextSink?
+    /// Set while a `Picker` collects its options.
+    var pickerOptions: _PickerOptions?
 
     init(renderer: Renderer) {
         self.renderer = renderer
@@ -111,6 +124,7 @@ public struct ConditionalView<TrueContent: View, FalseContent: View>: View {
 }
 
 @resultBuilder
+@MainActor
 public enum ViewBuilder {
     public static func buildBlock() -> EmptyView {
         EmptyView()

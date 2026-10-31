@@ -38,7 +38,8 @@ enum {
 /// Does not return.
 void sui_run(SUICallback launch, SUICallback render);
 
-/// Asks for `render` to run on the next main run loop turn. Calls coalesce.
+/// Asks for `render` to run on a later main run loop turn, at most four times
+/// a second. Calls coalesce.
 void sui_schedule_render(void);
 
 /// Starts a render pass. Views created until `sui_render_commit` are kept
@@ -90,6 +91,41 @@ SUIViewRef sui_list_create(unsigned long key);
 /// Appends a row showing `content`. If `action` is non-null the row
 /// highlights when touched and calls it; `disclosure` adds a chevron.
 void sui_list_add_row(SUIViewRef list, SUIViewRef content, long disclosure, SUICallback action, void *context);
+
+/// A list in the grouped style of a settings screen (`Form`): sections of
+/// rows on a gray background. Rows are added with `sui_list_add_row`.
+SUIViewRef sui_form_create(unsigned long key);
+
+/// The top of a form section, with a header if `title_utf8` isn't null.
+/// Add it with `sui_list_add_view` before the section's rows.
+SUIViewRef sui_form_header_create(const char *title_utf8);
+
+/// Appends `view` to a list as is, not as a row.
+void sui_list_add_view(SUIViewRef list, SUIViewRef view);
+
+/// A switch. `changed` is called with 1 or 0 when the user flips it.
+SUIViewRef sui_switch_create(long is_on, SUIIndexCallback changed, void *context);
+
+/// A stepper. Values are in hundredths; `changed` is called with the new one.
+SUIViewRef sui_stepper_create(long value, long minimum, long maximum, long step,
+                              SUIIndexCallback changed, void *context);
+
+/// A slider that takes the width it is offered. Values are in hundredths and
+/// `step` (0 for none) rounds them; `changed` is called while dragging, and
+/// `ended`, which may be null, when the user lets go.
+SUIViewRef sui_slider_create(long value, long minimum, long maximum, long step,
+                             SUIIndexCallback changed, SUICallback ended, void *context);
+
+/// A segmented control with `count` titles. `changed` is called with the
+/// index the user picks.
+SUIViewRef sui_segmented_create(const char *const *titles_utf8, long count, long selected,
+                                SUIIndexCallback changed, void *context);
+
+/// A spinning activity indicator.
+SUIViewRef sui_activity_indicator_create(void);
+
+/// Enables or disables a control, such as a button, switch or tappable view.
+void sui_control_set_enabled(SUIViewRef control, long enabled);
 
 /// A navigation controller's view. `key` identifies the controller across
 /// render passes, so its stack and back button survive re-rendering.
