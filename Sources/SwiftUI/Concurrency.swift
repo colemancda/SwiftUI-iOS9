@@ -5,6 +5,24 @@ import CSwiftUIBackend
 
 // Tasks run on the main queue; see Executor.c.
 
+/// The main actor, which Embedded Swift doesn't have.
+///
+/// Every task already runs on the main queue, so this global actor just gives
+/// `@MainActor` code, such as views, the isolation it expects.
+@globalActor
+public final actor MainActor {
+
+    public static let shared = MainActor()
+
+    /// Runs `operation` as main actor code. Only call it on the main thread,
+    /// which is where all code runs here.
+    public static func assumeIsolated<T>(_ operation: @MainActor () -> T) -> T {
+        withoutActuallyEscaping(operation) { operation in
+            unsafeBitCast(operation, to: (() -> T).self)()
+        }
+    }
+}
+
 extension Task where Success == Never, Failure == Never {
     /// Suspends the current task for at least `duration` nanoseconds, then
     /// throws `CancellationError` if the task was cancelled meanwhile.
@@ -52,14 +70,17 @@ public struct _TaskModifier<Content: View>: View {
         // The running task outlives this render, so it is kept in a state slot.
         let task = renderer.stateBox(initialValue: Task<Void, Never>?.none)
         let action = self.action
-        renderer.register(Renderer.Appearance(
-            key: renderer.makeKey(0x5441_534b_0000_0000),
-            onAppear: { task.value = Task { await action() } },
-            onDisappear: {
-                task.value?.cancel()
-                task.value = nil
-            }
-        ))
+        let key = renderer.makeKey(0x5441_534b_0000_0000)
+        if context.isVisible {
+            renderer.register(Renderer.Appearance(
+                key: key,
+                onAppear: { task.value = Task { await action() } },
+                onDisappear: {
+                    task.value?.cancel()
+                    task.value = nil
+                }
+            ))
+        }
         content._render(into: &nodes, context: context)
     }
 }
