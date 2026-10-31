@@ -1,0 +1,4 @@
+module CDarwinGATT {
+    header "DarwinGATTBackend.h"
+    export *
+}
