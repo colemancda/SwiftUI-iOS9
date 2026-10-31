@@ -134,6 +134,15 @@ void sui_schedule_render(void) {
     });
 }
 
+void sui_dispatch_main(SUICallback callback, void *context) {
+    dispatch_async_f(dispatch_get_main_queue(), context, callback);
+}
+
+void sui_dispatch_main_after(unsigned long milliseconds, SUICallback callback, void *context) {
+    dispatch_after_f(dispatch_time(DISPATCH_TIME_NOW, (int64_t)milliseconds * NSEC_PER_MSEC),
+                     dispatch_get_main_queue(), context, callback);
+}
+
 #pragma mark - Render pass
 
 void sui_render_begin(void) {

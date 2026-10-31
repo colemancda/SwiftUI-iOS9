@@ -1,8 +1,9 @@
 import SwiftUI
 
 // A list of nearby devices that drills down into details, shaped like a
-// Bluetooth scanner app. Each tap of the scan button simulates an
-// advertisement: a new device, or a new reading from a known one.
+// Bluetooth scanner app. While the list is shown, a task simulates an
+// advertisement every second: a new device, or a new reading from a known
+// one. The scan button simulates one immediately.
 
 @main
 struct DevicesApp: App {
@@ -66,8 +67,15 @@ struct DeviceList: View {
         }
         .navigationTitle("Devices")
         .navigationBarItems(trailing: scanButton)
-        .onAppear {
-            if store.devices.isEmpty { store.scan() }
+        .task {
+            while true {
+                store.scan()
+                do {
+                    try await Task.sleep(nanoseconds: 1_000_000_000)
+                } catch {
+                    return // cancelled: the list disappeared
+                }
+            }
         }
     }
 

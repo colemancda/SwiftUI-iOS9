@@ -105,4 +105,10 @@ void sui_navigation_set_level(SUIViewRef navigation, long index, SUIViewRef cont
 /// user goes back, `did_pop` is called with the number of levels left.
 void sui_navigation_commit(SUIViewRef navigation, long count, SUIIndexCallback did_pop, void *context);
 
+/// Calls `callback` on the main queue, on a later turn of the run loop.
+void sui_dispatch_main(SUICallback callback, void *context);
+
+/// Calls `callback` on the main queue after `milliseconds`.
+void sui_dispatch_main_after(unsigned long milliseconds, SUICallback callback, void *context);
+
 #endif
