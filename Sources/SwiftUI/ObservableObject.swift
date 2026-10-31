@@ -60,28 +60,40 @@ public struct StateObject<ObjectType: ObservableObject> {
 /// An `ObservableObject` supplied by an ancestor with `environmentObject(_:)`.
 @propertyWrapper
 public struct EnvironmentObject<ObjectType: ObservableObject> {
-    /// Resolved on first use while rendering, and kept so that actions
-    /// running later still see the object.
+    /// Resolved when the view is created during a render, or else on first
+    /// use while rendering, and kept so that actions and tasks running later
+    /// still see the object.
     final class Storage {
         var object: ObjectType?
     }
 
     let storage = Storage()
 
-    public init() {}
+    public init() {
+        // A view made in its parent's `body` already sees the parent's
+        // environment. One made before its own `environmentObject(_:)`
+        // modifier renders resolves later, in its `body`.
+        storage.object = Self.lookup()
+    }
 
     public var wrappedValue: ObjectType {
         if let object = storage.object {
             return object
         }
-        let id = ObjectIdentifier(ObjectType.self)
-        if let objects = currentRenderer?.currentContext?.environmentObjects,
-           let match = objects.last(where: { $0.0 == id }) {
-            let object = unsafeDowncast(match.1, to: ObjectType.self)
+        if let object = Self.lookup() {
             storage.object = object
             return object
         }
         fatalError("No ObservableObject of this type found. A View.environmentObject(_:) for it may be missing as an ancestor of this view.")
+    }
+
+    static func lookup() -> ObjectType? {
+        let id = ObjectIdentifier(ObjectType.self)
+        guard let objects = currentRenderer?.currentContext?.environmentObjects,
+              let match = objects.last(where: { $0.0 == id }) else {
+            return nil
+        }
+        return unsafeDowncast(match.1, to: ObjectType.self)
     }
 }
 
