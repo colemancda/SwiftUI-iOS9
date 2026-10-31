@@ -88,6 +88,27 @@ App code (Embedded Swift)
   backend API therefore only passes pointers and integers: sizes in whole points,
   colors as `0xRRGGBBAA`.
 
+## Bluetooth (DarwinGATT)
+
+`Sources/DarwinGATT` is a Bluetooth LE central for iOS 9, implementing
+[GATT](https://github.com/PureSwift/GATT)'s `CentralManager` on top of
+CoreBluetooth, with the same API as GATT's `DarwinCentral` (`state`,
+`scan(with:filterDuplicates:)`, `connect`, `notify`, …). Its Objective-C half
+(`Sources/CDarwinGATT`) runs one `CBCentralManager` on the main queue, where
+Swift tasks also run, and passes only pointers and integers to Swift.
+
+It depends on the [Bluetooth](https://github.com/PureSwift/Bluetooth) (8.2.0
+or later) and GATT (4.1.0 or later) modules, compiled for Embedded Swift by the
+app's build; this repo's Makefile doesn't build it. The
+[Govee](https://github.com/MillerTechnologyPeru/Govee) iOS 9 port
+(`iOS9/Makefile`) is an example.
+
+Apps using it must be **signed with a team identifier**, for example with an
+Apple Development identity and `codesign`, not ad-hoc with `ldid`. iOS 9's
+Bluetooth daemon only treats an app as being in the foreground if its
+signature has one; otherwise the app only gets results from scans filtered by
+service UUID.
+
 ## Building
 
 Requirements:
